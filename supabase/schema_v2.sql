@@ -157,3 +157,44 @@ create policy "members read audit log" on public.audit_log
 -- 2) approved version and approved_payload exactly match the outgoing version/payload;
 -- 3) no edits occurred after approval (any edit increments version and invalidates approval);
 -- 4) the user explicitly approved the exact final artifact and destination.
+
+
+-- Create the first workspace for the currently signed-in user.
+-- Safe to call once after sign-up; it will not create duplicate memberships.
+create or replace function public.create_my_workspace(workspace_name text default 'Beyond the Known')
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_workspace_id uuid;
+  current_user_id uuid := (select auth.uid());
+begin
+  if current_user_id is null then
+    raise exception 'You must be signed in to create a workspace';
+  end if;
+
+  select m.workspace_id into new_workspace_id
+  from public.workspace_members m
+  where m.user_id = current_user_id and m.role = 'owner'
+  order by m.created_at
+  limit 1;
+
+  if new_workspace_id is not null then
+    return new_workspace_id;
+  end if;
+
+  insert into public.workspaces(name)
+  values (coalesce(nullif(trim(workspace_name), ''), 'Beyond the Known'))
+  returning id into new_workspace_id;
+
+  insert into public.workspace_members(workspace_id, user_id, role)
+  values (new_workspace_id, current_user_id, 'owner');
+
+  return new_workspace_id;
+end;
+$$;
+
+revoke all on function public.create_my_workspace(text) from public;
+grant execute on function public.create_my_workspace(text) to authenticated;
